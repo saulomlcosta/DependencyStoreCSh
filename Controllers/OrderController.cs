@@ -4,7 +4,6 @@ using DependencyStore.Repositories;
 using DependencyStore.Services.Contracts;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.SqlClient;
-using RestSharp;
 
 namespace DependencyStore.Controllers;
 
@@ -12,24 +11,26 @@ public class OrderController : ControllerBase
 {
     private readonly ICustomerRepository _customerRepository;
     private readonly IDeliveryFeeService _deliveryFeeService;
+    private readonly IPromoCodeRepository _promoCodeRepository;
 
-    public OrderController(ICustomerRepository customerRepository, IDeliveryFeeService deliveryFeeService)
+    public OrderController(ICustomerRepository customerRepository, IDeliveryFeeService deliveryFeeService, IPromoCodeRepository promoCodeRepository)
     {
         _customerRepository = customerRepository;
         _deliveryFeeService = deliveryFeeService;
+        _promoCodeRepository = promoCodeRepository;
     }
 
     [Route("v1/orders")]
     [HttpPost]
     public async Task<IActionResult> Place(string customerId, string zipCode, string promoCode, int[] products)
     {
-        // #1 - Recupera o cliente
         var customer = await _customerRepository.GetByIdAsync(customerId);
         if (customer is null)
             return NotFound();
 
-        // #2 - Calcula o frete
         var deliveryFee = await _deliveryFeeService.GetDeliveryFeeAsync(zipCode);
+        var coupon = await _promoCodeRepository.GetPromoCodeAsync(promoCode);
+        var discount = coupon?.Value ?? 0M;
 
         // #3 - Calcula o total dos produtos
         decimal subTotal = 0;
@@ -41,16 +42,6 @@ public class OrderController : ControllerBase
                 product = await conn.QueryFirstAsync<Product>(getProductQuery, new { Id = p });
 
             subTotal += product.Price;
-        }
-
-        // #4 - Aplica o cupom de desconto
-        decimal discount = 0;
-        await using (var conn = new SqlConnection("CONN_STRING"))
-        {
-            const string query = "SELECT * FROM PROMO_CODES WHERE CODE=@code";
-            var promo = await conn.QueryFirstAsync<PromoCode>(query, new { code = promoCode });
-            if (promo.ExpireDate > DateTime.Now)
-                discount = promo.Value;
         }
 
         // #5 - Gera o pedido
@@ -65,7 +56,7 @@ public class OrderController : ControllerBase
         // #6 - Calcula o total
         order.Total = subTotal - discount + deliveryFee;
 
-        // #7 - Retorna
+        //#7 - Retorna
         return Ok(new
         {
             Message = $"Pedido {order.Code} gerado com sucesso!"
